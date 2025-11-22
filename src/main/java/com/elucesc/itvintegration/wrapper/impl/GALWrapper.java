@@ -1,0 +1,199 @@
+package com.elucesc.itvintegration.wrapper.impl;
+
+import com.elucesc.itvintegration.dto.gal.EstacionGAL;
+import com.elucesc.itvintegration.model.Estacion;
+import com.elucesc.itvintegration.model.Localidad;
+import com.elucesc.itvintegration.model.Provincia;
+import com.elucesc.itvintegration.model.TipoEstacion;
+import com.elucesc.itvintegration.wrapper.ItvDataWrapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Slf4j
+@Component
+public class GALWrapper implements ItvDataWrapper {
+
+    private final List<EstacionGAL> estacionesGAL;
+    private final Map<String, Long> provinciaCodigoMap = new HashMap<>();
+    private final Map<String, Long> localidadCodigoMap = new HashMap<>();
+    private Long localidadCodigoCounter = 1L;
+
+    public GALWrapper(List<EstacionGAL> estacionesGAL) {
+        this.estacionesGAL = estacionesGAL;
+    }
+
+    @Override
+    public List<Provincia> transformarProvincias() {
+        Set<String> provinciasUnicas = estacionesGAL.stream()
+                .map(EstacionGAL::getProvincia)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        List<Provincia> provincias = new ArrayList<>();
+        for (String nombreProvincia : provinciasUnicas) {
+            Long codigo = extraerCodigoProvincia(nombreProvincia);
+            provinciaCodigoMap.put(nombreProvincia, codigo);
+
+            provincias.add(Provincia.builder()
+                    .codigo(codigo)
+                    .nombre(nombreProvincia)
+                    .build());
+        }
+
+        return provincias;
+    }
+
+    @Override
+    public List<Localidad> transformarLocalidades() {
+        transformarProvincias();
+
+        List<Localidad> localidades = new ArrayList<>();
+        for (EstacionGAL estacion : estacionesGAL) {
+            String concello = estacion.getConcello();
+            if (concello == null || concello.trim().isEmpty()) continue;
+
+            if (!localidadCodigoMap.containsKey(concello)) {
+                Long codigoProvincia = extraerCodigoProvinciaDeCP(estacion.getCodigoPostal());
+
+                Localidad localidad = Localidad.builder()
+                        .codigo(null) // ✅ Dejar en null para autogenerar
+                        .nombre(concello)
+                        .codProvincia(codigoProvincia)
+                        .build();
+
+                localidades.add(localidad);
+                localidadCodigoMap.put(concello, localidadCodigoCounter++);
+            }
+        }
+
+        return localidades;
+    }
+
+    @Override
+    public List<Estacion> transformarEstaciones() {
+        // NO necesitamos llamar a transformarProvincias/Localidades aquí
+        // El servicio se encargará de guardarlas primero
+
+        List<Estacion> estaciones = new ArrayList<>();
+
+        for (EstacionGAL estacionGAL : estacionesGAL) {
+            // Parsear coordenadas de Google Maps
+            Double[] coordenadas = parsearCoordenadasGMaps(estacionGAL.getCoordenadasGmaps());
+
+            Estacion estacion = Estacion.builder()
+                    .nombre(estacionGAL.getNomeDaEstacion())
+                    .tipo(TipoEstacion.ESTACION_FIJA) // Todas son fijas según mapping
+                    .direccion(estacionGAL.getEnderezo())
+                    .codigoPostal(estacionGAL.getCodigoPostal() != null ?
+                            estacionGAL.getCodigoPostal().longValue() : null)
+                    .longitud(coordenadas[0])
+                    .latitud(coordenadas[1])
+                    .descripcion(null)
+                    .horario(estacionGAL.getHorario())
+                    .contacto(estacionGAL.getCorreoElectronico())
+                    .url(extraerUrl(estacionGAL.getSolicitudeCitaPrevia()))
+                    .codLocalidad(null) // ✅ Lo dejamos null por ahora
+                    .build();
+
+            estaciones.add(estacion);
+        }
+
+        return estaciones;
+    }
+
+    private Long extraerCodigoProvincia(String nombreProvincia) {
+        // Códigos postales de Galicia: 15 (A Coruña), 27 (Lugo), 32 (Ourense), 36 (Pontevedra)
+        if (nombreProvincia == null) return null;
+
+        String normalized = nombreProvincia.toLowerCase();
+        if (normalized.contains("coruña") || normalized.contains("coruna")) {
+            return 15L;
+        } else if (normalized.contains("lugo")) {
+            return 27L;
+        } else if (normalized.contains("ourense")) {
+            return 32L;
+        } else if (normalized.contains("pontevedra")) {
+            return 36L;
+        }
+        return null;
+    }
+
+    private Long extraerCodigoProvinciaDeCP(Integer codigoPostal) {
+        if (codigoPostal == null) return null;
+
+        // Convertir a String con formato de 5 dígitos (rellenar con ceros)
+        String cpString = String.format("%05d", codigoPostal);
+
+        // Extraer los dos primeros dígitos
+        String prefijo = cpString.substring(0, 2);
+
+        // Convertir a Long (esto quitará el cero inicial si existe)
+        // "15" -> 15L, "27" -> 27L
+        return Long.parseLong(prefijo);
+    }
+
+    private Double[] parsearCoordenadasGMaps(String coordenadas) {
+        if (coordenadas == null || coordenadas.trim().isEmpty()) {
+            return new Double[]{null, null};
+        }
+
+        try {
+            // Formato: "43° 18.856', -8° 17.165'" o "42.906076,-8.498523"
+            coordenadas = coordenadas.replaceAll("[°'\"]", "").trim();
+
+            String[] partes = coordenadas.split(",");
+            if (partes.length != 2) {
+                return new Double[]{null, null};
+            }
+
+            // Convertir grados decimales si es necesario
+            Double latitud = convertirCoordenada(partes[0].trim());
+            Double longitud = convertirCoordenada(partes[1].trim());
+
+            return new Double[]{longitud, latitud};
+        } catch (Exception e) {
+            log.warn("No se pudieron parsear coordenadas: {}", coordenadas, e);
+            return new Double[]{null, null};
+        }
+    }
+
+    private Double convertirCoordenada(String coord) {
+        coord = coord.trim();
+
+        // Si ya es decimal simple
+        if (!coord.contains(" ")) {
+            return Double.parseDouble(coord);
+        }
+
+        // Si está en formato grados minutos: "43 18.856"
+        String[] partes = coord.split("\\s+");
+        if (partes.length == 2) {
+            double grados = Double.parseDouble(partes[0]);
+            double minutos = Double.parseDouble(partes[1]);
+            double resultado = grados + (minutos / 60.0);
+            return resultado;
+        }
+
+        return Double.parseDouble(coord);
+    }
+
+    private String extraerUrl(String solicitudCitaPrevia) {
+        if (solicitudCitaPrevia == null || solicitudCitaPrevia.trim().isEmpty()) {
+            return null;
+        }
+
+        // Si es una URL completa, extraer solo el dominio principal
+        if (solicitudCitaPrevia.startsWith("http")) {
+            try {
+                return solicitudCitaPrevia.split("\\?")[0]; // Truncar parámetros
+            } catch (Exception e) {
+                return solicitudCitaPrevia;
+            }
+        }
+
+        return solicitudCitaPrevia;
+    }
+}

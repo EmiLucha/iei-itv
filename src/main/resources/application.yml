@@ -1,0 +1,44 @@
+# application.yml
+spring:
+  application:
+    name: itv-integration-service
+  
+  # Configuración de Supabase (PostgreSQL)
+  datasource:
+    url: jdbc:postgresql://aws-1-eu-north-1.pooler.supabase.com:5432/postgres
+    username: postgres.klsrczotmlszcaroffbh
+    password: $#WH33waZPaCiX+
+    driver-class-name: org.postgresql.Driver
+
+
+  # Configuración JPA
+  jpa:
+    hibernate:
+      ddl-auto: validate  # No crear tablas automáticamente, usar las existentes
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        default_schema: public
+
+  # Jackson para JSON
+  jackson:
+    default-property-inclusion: non_null
+    deserialization:
+      fail-on-unknown-properties: false
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.itv.integration: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+
+# Configuración de archivos
+integration:
+  files:
+    cv: classpath:data/estaciones.json
+    gal: classpath:data/csvjson.json
+    cat: classpath:data/xmltojson.json
