@@ -35,7 +35,7 @@ public class IntegrationService {
     private final ProvinciaRepository provinciaRepository;
     private final LocalidadRepository localidadRepository;
     private final EstacionRepository estacionRepository;
-    private final GeocodingService geocodingService;
+    private final OpenCageGeocodingService openCageGeocodingService;
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
 
@@ -44,13 +44,13 @@ public class IntegrationService {
             ProvinciaRepository provinciaRepository,
             LocalidadRepository localidadRepository,
             EstacionRepository estacionRepository,
-            GeocodingService geocodingService,
+            OpenCageGeocodingService openCageGeocodingService,
             ObjectMapper objectMapper,
             ResourceLoader resourceLoader) {
         this.provinciaRepository = provinciaRepository;
         this.localidadRepository = localidadRepository;
         this.estacionRepository = estacionRepository;
-        this.geocodingService = geocodingService;
+        this.openCageGeocodingService = openCageGeocodingService;
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
     }
@@ -72,11 +72,16 @@ public class IntegrationService {
         // 2. Transformar y guardar localidades
         List<Localidad> localidades = wrapper.transformarLocalidades();
         log.info("Transformadas {} localidades", localidades.size());
-        guardarLocalidades(localidades);
+        Map<String, Long> localidadNombreACodigo = guardarLocalidades(localidades);
 
-        // 3. Transformar y guardar estaciones (ahora las localidades ya tienen IDs)
+        // 3. Transformar estaciones
         List<Estacion> estaciones = wrapper.transformarEstaciones();
         log.info("Transformadas {} estaciones", estaciones.size());
+
+        // 4. Vincular estaciones con localidades usando los IDs guardados
+        vincularEstacionesConLocalidades(estaciones, wrapper, localidadNombreACodigo);
+
+        // 5. Guardar estaciones con cod_localidad establecido
         guardarEstaciones(estaciones);
 
         log.info("Integración completada exitosamente");
@@ -101,7 +106,6 @@ public class IntegrationService {
     }
 
     private ItvDataWrapper crearWrapper(String rutaArchivo, TipoOrigen tipoOrigen) throws IOException {
-        // Cargar el recurso desde el classpath
         Resource resource = resourceLoader.getResource(rutaArchivo);
 
         if (!resource.exists()) {
@@ -114,7 +118,7 @@ public class IntegrationService {
             switch (tipoOrigen) {
                 case COMUNIDAD_VALENCIANA:
                     List<EstacionCV> estacionesCV = objectMapper.readValue(inputStream, new TypeReference<List<EstacionCV>>() {});
-                    return new CVWrapper(estacionesCV, geocodingService);
+                    return new CVWrapper(estacionesCV, openCageGeocodingService);
 
                 case GALICIA:
                     List<EstacionGAL> estacionesGAL = objectMapper.readValue(inputStream, new TypeReference<List<EstacionGAL>>() {});
@@ -132,7 +136,6 @@ public class IntegrationService {
 
     private void guardarProvincias(List<Provincia> provincias) {
         for (Provincia provincia : provincias) {
-            // Verificar si ya existe
             if (!provinciaRepository.existsByCodigo(provincia.getCodigo())) {
                 provinciaRepository.save(provincia);
                 log.debug("Provincia guardada: {}", provincia.getNombre());
@@ -146,19 +149,16 @@ public class IntegrationService {
         Map<String, Long> nombreACodigo = new HashMap<>();
 
         for (Localidad localidad : localidades) {
-            // Verificar si ya existe por nombre y provincia
             Localidad existente = localidadRepository.findByNombreAndCodProvincia(
                     localidad.getNombre(),
                     localidad.getCodProvincia()
             );
 
             if (existente != null) {
-                // Si ya existe, usar el código existente
                 nombreACodigo.put(localidad.getNombre(), existente.getCodigo());
                 log.debug("Localidad {} ya existe con código {}",
                         localidad.getNombre(), existente.getCodigo());
             } else {
-                // Guardar nueva localidad (el código será autogenerado)
                 Localidad guardada = localidadRepository.save(localidad);
                 nombreACodigo.put(guardada.getNombre(), guardada.getCodigo());
                 log.debug("Localidad guardada: {} con código {}",
@@ -169,11 +169,25 @@ public class IntegrationService {
         return nombreACodigo;
     }
 
-    private void actualizarCodigosLocalidad(List<Estacion> estaciones,
-                                            Map<String, Long> localidadNombreACodigo) {
-        // Este método necesitará acceso al nombre de la localidad
-        // Por ahora, las estaciones ya tienen codLocalidad asignado en el wrapper
-        // pero si falla, podríamos necesitar otra estrategia
+    private void vincularEstacionesConLocalidades(List<Estacion> estaciones,
+                                                  ItvDataWrapper wrapper,
+                                                  Map<String, Long> localidadNombreACodigo) {
+        Map<Integer, String> indiceEstacionALocalidad = wrapper.obtenerMapaEstacionLocalidad();
+
+        for (int i = 0; i < estaciones.size(); i++) {
+            Estacion estacion = estaciones.get(i);
+            String nombreLocalidad = indiceEstacionALocalidad.get(i);
+
+            if (nombreLocalidad != null && localidadNombreACodigo.containsKey(nombreLocalidad)) {
+                Long codLocalidad = localidadNombreACodigo.get(nombreLocalidad);
+                estacion.setCodLocalidad(codLocalidad);
+                log.debug("Vinculada estación '{}' con localidad '{}' (código: {})",
+                        estacion.getNombre(), nombreLocalidad, codLocalidad);
+            } else {
+                log.warn("No se pudo vincular estación '{}' con localidad '{}'",
+                        estacion.getNombre(), nombreLocalidad);
+            }
+        }
     }
 
     private void guardarEstaciones(List<Estacion> estaciones) {

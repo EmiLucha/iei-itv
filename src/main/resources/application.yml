@@ -42,3 +42,8 @@ integration:
     cv: classpath:data/estaciones.json
     gal: classpath:data/csvjson.json
     cat: classpath:data/xmltojson.json
+
+# OpenCage Geocoding API Configuration (2500 peticiones/día gratis)
+opencage:
+  api:
+    key: c84b93d603204903882eb168ad5cfbb7

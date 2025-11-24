@@ -1,7 +1,6 @@
 package com.elucesc.itvintegration.wrapper.impl;
 
 import com.elucesc.itvintegration.dto.cat.EstacionCAT;
-import com.elucesc.itvintegration.dto.cv.EstacionCV;
 import com.elucesc.itvintegration.model.Estacion;
 import com.elucesc.itvintegration.model.Localidad;
 import com.elucesc.itvintegration.model.Provincia;
@@ -94,6 +93,18 @@ public class CATWrapper implements ItvDataWrapper {
             estaciones.add(estacion);
         }
         return estaciones;
+    }
+
+    @Override
+    public Map<Integer, String> obtenerMapaEstacionLocalidad() {
+        Map<Integer, String> mapa = new HashMap<>();
+        for (int i = 0; i < estacionesCAT.size(); i++) {
+            String municipi = estacionesCAT.get(i).getMunicipi();
+            if (municipi != null && !municipi.trim().isEmpty()) {
+                mapa.put(i, municipi);
+            }
+        }
+        return mapa;
     }
 
     private Long extraerCodigoProvinciaPorCP(Integer codigoPostal) {

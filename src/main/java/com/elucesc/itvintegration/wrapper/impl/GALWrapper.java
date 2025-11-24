@@ -59,7 +59,7 @@ public class GALWrapper implements ItvDataWrapper {
                 Long codigoProvincia = extraerCodigoProvinciaDeCP(estacion.getCodigoPostal());
 
                 Localidad localidad = Localidad.builder()
-                        .codigo(null) // ✅ Dejar en null para autogenerar
+                        .codigo(null)
                         .nombre(concello)
                         .codProvincia(codigoProvincia)
                         .build();
@@ -74,9 +74,6 @@ public class GALWrapper implements ItvDataWrapper {
 
     @Override
     public List<Estacion> transformarEstaciones() {
-        // NO necesitamos llamar a transformarProvincias/Localidades aquí
-        // El servicio se encargará de guardarlas primero
-
         List<Estacion> estaciones = new ArrayList<>();
 
         for (EstacionGAL estacionGAL : estacionesGAL) {
@@ -85,7 +82,7 @@ public class GALWrapper implements ItvDataWrapper {
 
             Estacion estacion = Estacion.builder()
                     .nombre(estacionGAL.getNomeDaEstacion())
-                    .tipo(TipoEstacion.ESTACION_FIJA) // Todas son fijas según mapping
+                    .tipo(TipoEstacion.ESTACION_FIJA)
                     .direccion(estacionGAL.getEnderezo())
                     .codigoPostal(estacionGAL.getCodigoPostal() != null ?
                             estacionGAL.getCodigoPostal().longValue() : null)
@@ -95,7 +92,7 @@ public class GALWrapper implements ItvDataWrapper {
                     .horario(estacionGAL.getHorario())
                     .contacto(estacionGAL.getCorreoElectronico())
                     .url(extraerUrl(estacionGAL.getSolicitudeCitaPrevia()))
-                    .codLocalidad(null) // ✅ Lo dejamos null por ahora
+                    .codLocalidad(null)
                     .build();
 
             estaciones.add(estacion);
@@ -104,8 +101,19 @@ public class GALWrapper implements ItvDataWrapper {
         return estaciones;
     }
 
+    @Override
+    public Map<Integer, String> obtenerMapaEstacionLocalidad() {
+        Map<Integer, String> mapa = new HashMap<>();
+        for (int i = 0; i < estacionesGAL.size(); i++) {
+            String concello = estacionesGAL.get(i).getConcello();
+            if (concello != null && !concello.trim().isEmpty()) {
+                mapa.put(i, concello);
+            }
+        }
+        return mapa;
+    }
+
     private Long extraerCodigoProvincia(String nombreProvincia) {
-        // Códigos postales de Galicia: 15 (A Coruña), 27 (Lugo), 32 (Ourense), 36 (Pontevedra)
         if (nombreProvincia == null) return null;
 
         String normalized = nombreProvincia.toLowerCase();
@@ -124,14 +132,9 @@ public class GALWrapper implements ItvDataWrapper {
     private Long extraerCodigoProvinciaDeCP(Integer codigoPostal) {
         if (codigoPostal == null) return null;
 
-        // Convertir a String con formato de 5 dígitos (rellenar con ceros)
         String cpString = String.format("%05d", codigoPostal);
-
-        // Extraer los dos primeros dígitos
         String prefijo = cpString.substring(0, 2);
 
-        // Convertir a Long (esto quitará el cero inicial si existe)
-        // "15" -> 15L, "27" -> 27L
         return Long.parseLong(prefijo);
     }
 
@@ -141,7 +144,6 @@ public class GALWrapper implements ItvDataWrapper {
         }
 
         try {
-            // Formato: "43° 18.856', -8° 17.165'" o "42.906076,-8.498523"
             coordenadas = coordenadas.replaceAll("[°'\"]", "").trim();
 
             String[] partes = coordenadas.split(",");
@@ -149,7 +151,6 @@ public class GALWrapper implements ItvDataWrapper {
                 return new Double[]{null, null};
             }
 
-            // Convertir grados decimales si es necesario
             Double latitud = convertirCoordenada(partes[0].trim());
             Double longitud = convertirCoordenada(partes[1].trim());
 
@@ -163,12 +164,10 @@ public class GALWrapper implements ItvDataWrapper {
     private Double convertirCoordenada(String coord) {
         coord = coord.trim();
 
-        // Si ya es decimal simple
         if (!coord.contains(" ")) {
             return Double.parseDouble(coord);
         }
 
-        // Si está en formato grados minutos: "43 18.856"
         String[] partes = coord.split("\\s+");
         if (partes.length == 2) {
             double grados = Double.parseDouble(partes[0]);
@@ -185,10 +184,9 @@ public class GALWrapper implements ItvDataWrapper {
             return null;
         }
 
-        // Si es una URL completa, extraer solo el dominio principal
         if (solicitudCitaPrevia.startsWith("http")) {
             try {
-                return solicitudCitaPrevia.split("\\?")[0]; // Truncar parámetros
+                return solicitudCitaPrevia.split("\\?")[0];
             } catch (Exception e) {
                 return solicitudCitaPrevia;
             }

@@ -1,10 +1,11 @@
 package com.elucesc.itvintegration.wrapper.impl;
+
 import com.elucesc.itvintegration.dto.cv.EstacionCV;
 import com.elucesc.itvintegration.model.Estacion;
 import com.elucesc.itvintegration.model.Localidad;
 import com.elucesc.itvintegration.model.Provincia;
 import com.elucesc.itvintegration.model.TipoEstacion;
-import com.elucesc.itvintegration.service.GeocodingService;
+import com.elucesc.itvintegration.service.OpenCageGeocodingService;
 import com.elucesc.itvintegration.wrapper.ItvDataWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,16 +19,16 @@ import java.util.stream.Collectors;
 public class CVWrapper implements ItvDataWrapper {
 
     private final List<EstacionCV> estacionesCV;
-    private final GeocodingService geocodingService;
+    private final OpenCageGeocodingService openCageGeocodingService;
     private final Map<String, Long> provinciaCodigoMap = new HashMap<>();
     private final Map<String, Long> localidadCodigoMap = new HashMap<>();
     private Long provinciaCodigoCounter = 1L;
     private Long localidadCodigoCounter = 1L;
 
     @Autowired
-    public CVWrapper(List<EstacionCV> estacionesCV, GeocodingService geocodingService) {
+    public CVWrapper(List<EstacionCV> estacionesCV, OpenCageGeocodingService openCageGeocodingService) {
         this.estacionesCV = estacionesCV;
-        this.geocodingService = geocodingService;
+        this.openCageGeocodingService = openCageGeocodingService;
     }
 
     @Override
@@ -53,7 +54,6 @@ public class CVWrapper implements ItvDataWrapper {
 
     @Override
     public List<Localidad> transformarLocalidades() {
-        // Primero procesar provincias para tener los códigos
         transformarProvincias();
 
         Set<String> municipiosUnicos = estacionesCV.stream()
@@ -68,17 +68,15 @@ public class CVWrapper implements ItvDataWrapper {
             if (municipio == null || municipio.trim().isEmpty()) continue;
 
             if (!localidadCodigoMap.containsKey(municipio)) {
-                // NO establecer el código - dejarlo null para que sea autogenerado
                 Long codigoProvincia = provinciaCodigoMap.get(estacion.getProvincia());
 
                 Localidad localidad = Localidad.builder()
-                        .codigo(null) // ✅ Dejar en null para autogenerar
+                        .codigo(null)
                         .nombre(municipio)
                         .codProvincia(codigoProvincia)
                         .build();
 
                 localidades.add(localidad);
-                // Guardar temporalmente con el contador para referencia
                 localidadCodigoMap.put(municipio, localidadCodigoCounter++);
             }
         }
@@ -88,16 +86,19 @@ public class CVWrapper implements ItvDataWrapper {
 
     @Override
     public List<Estacion> transformarEstaciones() {
-        // NO necesitamos llamar a transformarProvincias/Localidades aquí
-        // El servicio se encargará de guardarlas primero
-
         List<Estacion> estaciones = new ArrayList<>();
 
-        for (EstacionCV estacionCV : estacionesCV) {
-            String municipio = estacionCV.getMunicipio();
+        log.info("Iniciando geocoding de {} estaciones (puede tardar unos minutos...)", estacionesCV.size());
+        int procesadas = 0;
+        int conCoordenadas = 0;
 
-            // Obtener coordenadas mediante servicio de geocodificación
-            Double[] coordenadas = geocodingService.obtenerCoordenadas(estacionCV.getDireccion());
+        for (EstacionCV estacionCV : estacionesCV) {
+            // Obtener coordenadas usando OpenCage
+            Double[] coordenadas = obtenerCoordenadasInteligente(estacionCV);
+
+            if (coordenadas[0] != null && coordenadas[1] != null) {
+                conCoordenadas++;
+            }
 
             Estacion estacion = Estacion.builder()
                     .nombre(construirNombre(estacionCV))
@@ -110,13 +111,115 @@ public class CVWrapper implements ItvDataWrapper {
                     .horario(estacionCV.getHorarios())
                     .contacto(estacionCV.getCorreo())
                     .url("https://www.sitval.com")
-                    .codLocalidad(null) // ✅ Lo dejamos null por ahora
+                    .codLocalidad(null)
                     .build();
 
             estaciones.add(estacion);
+
+            procesadas++;
+            if (procesadas % 10 == 0) {
+                log.info("Procesadas {}/{} estaciones ({} con coordenadas)",
+                        procesadas, estacionesCV.size(), conCoordenadas);
+            }
         }
 
+        log.info("Geocoding completado: {}/{} estaciones con coordenadas", conCoordenadas, procesadas);
         return estaciones;
+    }
+
+    @Override
+    public Map<Integer, String> obtenerMapaEstacionLocalidad() {
+        Map<Integer, String> mapa = new HashMap<>();
+        for (int i = 0; i < estacionesCV.size(); i++) {
+            String municipio = estacionesCV.get(i).getMunicipio();
+            if (municipio != null && !municipio.trim().isEmpty()) {
+                mapa.put(i, municipio);
+            }
+        }
+        return mapa;
+    }
+
+    /**
+     * Obtiene coordenadas de forma inteligente:
+     * - Omite estaciones móviles/agrícolas
+     * - Usa dirección completa cuando es válida
+     * - Fallback a municipio si dirección no funciona
+     * - Respeta límite de 1 petición/segundo de OpenCage
+     */
+    private Double[] obtenerCoordenadasInteligente(EstacionCV estacion) {
+        String direccion = estacion.getDireccion();
+        String municipio = estacion.getMunicipio();
+        String provincia = estacion.getProvincia();
+
+        // Omitir estaciones móviles/agrícolas (no tienen ubicación fija)
+        if (esTipoMovilOAgricola(direccion)) {
+            log.debug("Omitiendo geocoding para estación móvil/agrícola: {}", direccion);
+            return new Double[]{null, null};
+        }
+
+        // Si la dirección es válida, usarla completa
+        if (esDireccionValida(direccion)) {
+            Double[] coordenadas = openCageGeocodingService.obtenerCoordenadasConDelay(
+                    construirDireccionCompleta(direccion, municipio, provincia)
+            );
+
+            if (coordenadas[0] != null && coordenadas[1] != null) {
+                return coordenadas;
+            }
+
+            log.warn("No se encontraron coordenadas para dirección: {}", direccion);
+        }
+
+        // Fallback: buscar solo por municipio + provincia
+        if (municipio != null && !municipio.trim().isEmpty()) {
+            log.debug("Usando municipio como fallback: {}", municipio);
+            return openCageGeocodingService.obtenerCoordenadasConDelay(
+                    construirDireccionCompleta(null, municipio, provincia)
+            );
+        }
+
+        return new Double[]{null, null};
+    }
+
+    private boolean esTipoMovilOAgricola(String direccion) {
+        if (direccion == null) return false;
+
+        String dirLower = direccion.toLowerCase();
+        return dirLower.contains("móvil") ||
+                dirLower.contains("movil") ||
+                dirLower.contains("agrícola") ||
+                dirLower.contains("agricola");
+    }
+
+    private boolean esDireccionValida(String direccion) {
+        if (direccion == null || direccion.trim().isEmpty()) {
+            return false;
+        }
+
+        // OpenCage maneja bien direcciones con "s/n", así que las permitimos
+        return true;
+    }
+
+    private String construirDireccionCompleta(String direccion, String municipio, String provincia) {
+        StringBuilder sb = new StringBuilder();
+
+        if (direccion != null && !direccion.trim().isEmpty()) {
+            sb.append(direccion);
+        }
+
+        if (municipio != null && !municipio.trim().isEmpty()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(municipio);
+        }
+
+        if (provincia != null && !provincia.trim().isEmpty()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(provincia);
+        }
+
+        sb.append(", España");
+
+        return sb.toString();
     }
 
     private String construirNombre(EstacionCV estacion) {
@@ -132,7 +235,6 @@ public class CVWrapper implements ItvDataWrapper {
     }
 
     private Long extraerCodigoProvincia(String nombreProvincia) {
-        // Los códigos postales de CV empiezan con: 03 (Alicante), 12 (Castellón), 46 (Valencia)
         switch (nombreProvincia) {
             case "Alicante": return 3L;
             case "Castellón": return 12L;
