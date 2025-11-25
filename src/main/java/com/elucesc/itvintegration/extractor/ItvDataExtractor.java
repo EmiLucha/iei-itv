@@ -1,5 +1,4 @@
-
-package com.elucesc.itvintegration.wrapper;
+package com.elucesc.itvintegration.extractor;
 
 import com.elucesc.itvintegration.model.Estacion;
 import com.elucesc.itvintegration.model.Localidad;
@@ -8,7 +7,7 @@ import com.elucesc.itvintegration.model.Provincia;
 import java.util.List;
 import java.util.Map;
 
-public interface ItvDataWrapper {
+public interface ItvDataExtractor {
     List<Estacion> transformarEstaciones();
     List<Localidad> transformarLocalidades();
     List<Provincia> transformarProvincias();
@@ -19,4 +18,3 @@ public interface ItvDataWrapper {
      */
     Map<Integer, String> obtenerMapaEstacionLocalidad();
 }
-

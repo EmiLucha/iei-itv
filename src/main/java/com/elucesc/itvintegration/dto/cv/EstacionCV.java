@@ -29,4 +29,3 @@ public class EstacionCV {
     @JsonProperty("CORREO")
     private String correo;
 }
-

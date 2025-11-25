@@ -1,21 +1,19 @@
-# application.yml
 spring:
   application:
     name: itv-integration-service
-  
-  # Configuraci�n de Supabase (PostgreSQL)
+
+  # Configuración de Supabase (PostgreSQL)
   datasource:
     url: jdbc:postgresql://aws-1-eu-north-1.pooler.supabase.com:5432/postgres
     username: postgres.klsrczotmlszcaroffbh
     password: $#WH33waZPaCiX+
     driver-class-name: org.postgresql.Driver
 
-
-  # Configuraci�n JPA
+  # Configuración JPA
   jpa:
     hibernate:
-      ddl-auto: validate  # No crear tablas autom�ticamente, usar las existentes
-    show-sql: true
+      ddl-auto: validate  # No crear tablas automáticamente, usar las existentes
+    show-sql: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
@@ -32,18 +30,18 @@ spring:
 logging:
   level:
     root: INFO
-    com.itv.integration: DEBUG
+    com.elucesc.itvintegration: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
 
-# Configuraci�n de archivos
+# Configuración de archivos con nuevos formatos
 integration:
   files:
-    cv: classpath:data/estaciones.json
-    gal: classpath:data/csvjson.json
-    cat: classpath:data/xmltojson.json
+    cv: classpath:data/estaciones_cv.json    # Comunidad Valenciana - JSON
+    gal: classpath:data/estaciones_gal.csv   # Galicia - CSV
+    cat: classpath:data/estaciones_cat.xml   # Cataluña - XML
 
-# OpenCage Geocoding API Configuration (2500 peticiones/d�a gratis)
+# OpenCage Geocoding API Configuration (2500 peticiones/día gratis)
 opencage:
   api:
     key: c84b93d603204903882eb168ad5cfbb7

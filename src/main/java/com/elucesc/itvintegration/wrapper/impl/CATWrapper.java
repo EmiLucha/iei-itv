@@ -1,129 +1,155 @@
 package com.elucesc.itvintegration.wrapper.impl;
 
-import com.elucesc.itvintegration.dto.cat.EstacionCAT;
-import com.elucesc.itvintegration.model.Estacion;
-import com.elucesc.itvintegration.model.Localidad;
-import com.elucesc.itvintegration.model.Provincia;
-import com.elucesc.itvintegration.model.TipoEstacion;
-import com.elucesc.itvintegration.wrapper.ItvDataWrapper;
+import com.elucesc.itvintegration.wrapper.Wrapper;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
+/**
+ * Wrapper específico para archivos XML de Cataluña
+ * Elimina los elementos <response> y <row> padre, extrayendo solo los <row> internos con datos
+ */
 @Slf4j
 @Component
-public class CATWrapper implements ItvDataWrapper {
+public class CATWrapper implements Wrapper {
 
-    private final List<EstacionCAT> estacionesCAT;
-    private final Map<String, Long> localidadCodigoMap = new HashMap<>();
+    private final ObjectMapper objectMapper;
 
-    public CATWrapper(List<EstacionCAT> estacionesCAT) {
-        this.estacionesCAT = estacionesCAT;
+    public CATWrapper(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
     }
 
     @Override
-    public List<Provincia> transformarProvincias() {
-        Map<Long, String> provinciasMap = new HashMap<>();
+    public String transformToJson(InputStream inputStream) throws IOException {
+        log.info("Iniciando transformación de XML de Cataluña a JSON");
 
-        for (EstacionCAT estacion : estacionesCAT) {
-            Long codigoProvincia = extraerCodigoProvinciaPorCP(estacion.getCodigoPostal());
-            if (codigoProvincia == null) continue;
+        try {
+            // Leer XML completo
+            String xmlContent = new String(inputStream.readAllBytes(), StandardCharsets.UTF_8);
+            log.debug("XML leído: {} caracteres", xmlContent.length());
 
-            String nombre = estacion.getServeisTerritorials();
-            if (nombre == null || nombre.trim().isEmpty()) nombre = "Desconocida";
+            // Parsear XML usando DOM
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document document = builder.parse(
+                    new ByteArrayInputStream(xmlContent.getBytes(StandardCharsets.UTF_8))
+            );
 
-            provinciasMap.putIfAbsent(codigoProvincia, nombre);
+            // Normalizar el documento
+            document.getDocumentElement().normalize();
+
+            // Obtener todos los <row> del documento
+            NodeList rowNodes = document.getElementsByTagName("row");
+            log.debug("Encontrados {} elementos <row> en total", rowNodes.getLength());
+
+            List<Map<String, Object>> estaciones = new ArrayList<>();
+
+            // Procesar cada <row>
+            for (int i = 0; i < rowNodes.getLength(); i++) {
+                Node rowNode = rowNodes.item(i);
+
+                if (rowNode.getNodeType() == Node.ELEMENT_NODE) {
+                    Element rowElement = (Element) rowNode;
+
+                    // Extraer datos del <row>
+                    Map<String, Object> estacion = extraerDatosDeRow(rowElement);
+
+                    // Solo agregar si tiene datos reales (ignorar <row> padre vacío)
+                    if (!estacion.isEmpty() && tieneDatosReales(estacion)) {
+                        estaciones.add(estacion);
+                        log.trace("Estación agregada: {}", estacion.get("denominaci"));
+                    } else {
+                        log.trace("Row vacío ignorado (probablemente el contenedor padre)");
+                    }
+                }
+            }
+
+            log.info("✅ Procesadas {} estaciones válidas desde XML", estaciones.size());
+
+            // Convertir a JSON
+            String json = objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(estaciones);
+            log.info("XML transformado exitosamente a JSON");
+
+            return json;
+
+        } catch (Exception e) {
+            log.error("Error al transformar XML de Cataluña a JSON", e);
+            throw new IOException("Error transformando XML a JSON: " + e.getMessage(), e);
         }
-
-        return provinciasMap.entrySet().stream()
-                .map(e -> Provincia.builder()
-                        .codigo(e.getKey())
-                        .nombre(e.getValue())
-                        .build())
-                .collect(Collectors.toList());
     }
 
-    @Override
-    public List<Localidad> transformarLocalidades() {
-        List<Localidad> localidades = new ArrayList<>();
-        for (EstacionCAT estacion : estacionesCAT) {
-            String municipi = estacion.getMunicipi();
-            if (municipi == null || municipi.trim().isEmpty()) continue;
+    /**
+     * Extrae los datos de un elemento <row> y los convierte en un Map
+     */
+    private Map<String, Object> extraerDatosDeRow(Element rowElement) {
+        Map<String, Object> datos = new LinkedHashMap<>();
+        NodeList children = rowElement.getChildNodes();
 
-            if (!localidadCodigoMap.containsKey(municipi)) {
-                Long codigoProvincia = extraerCodigoProvinciaPorCP(estacion.getCodigoPostal());
-                if (codigoProvincia == null) continue;
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
 
-                Localidad localidad = Localidad.builder()
-                        .codigo(null)
-                        .nombre(municipi)
-                        .codProvincia(codigoProvincia)
-                        .build();
+            if (child.getNodeType() == Node.ELEMENT_NODE) {
+                Element element = (Element) child;
+                String tagName = element.getTagName();
 
-                localidades.add(localidad);
-                localidadCodigoMap.put(municipi, null);
+                // Ignorar elementos con atributos especiales de metadatos
+                if (tagName.startsWith("_") || tagName.equals("geocoded_column")) {
+                    continue;
+                }
+
+                // Ignorar elementos <row> anidados (ya se procesan en el bucle principal)
+                if (tagName.equals("row")) {
+                    continue;
+                }
+
+                // Manejar elementos con atributo 'url'
+                if (element.hasAttribute("url")) {
+                    datos.put(tagName, element.getAttribute("url"));
+                } else {
+                    // Obtener el texto del elemento
+                    String textContent = element.getTextContent();
+                    if (textContent != null && !textContent.trim().isEmpty()) {
+                        datos.put(tagName, textContent.trim());
+                    }
+                }
             }
         }
-        return localidades;
+
+        return datos;
+    }
+
+    /**
+     * Verifica si un Map tiene datos reales (campos de estación)
+     * Esto ayuda a filtrar el <row> padre vacío que solo contiene otros <row>
+     */
+    private boolean tieneDatosReales(Map<String, Object> datos) {
+        // Un <row> con datos reales debe tener campos como "estaci", "denominaci", etc.
+        // Si solo tiene otros <row> anidados o está vacío, no es válido
+
+        // Verificar que tenga al menos uno de los campos esperados
+        return datos.containsKey("estaci") ||
+                datos.containsKey("denominaci") ||
+                datos.containsKey("municipi");
     }
 
     @Override
-    public List<Estacion> transformarEstaciones() {
-        List<Estacion> estaciones = new ArrayList<>();
-        for (EstacionCAT estacionCAT : estacionesCAT) {
-            Double longitud = convertirCoordenada(estacionCAT.getLon());
-            Double latitud = convertirCoordenada(estacionCAT.getLat());
-
-            Estacion estacion = Estacion.builder()
-                    .nombre("Estación ITV de " + estacionCAT.getDenominaci())
-                    .tipo(TipoEstacion.ESTACION_FIJA)
-                    .direccion(estacionCAT.getDireccion())
-                    .codigoPostal(estacionCAT.getCodigoPostal() != null ? estacionCAT.getCodigoPostal().longValue() : null)
-                    .longitud(longitud)
-                    .latitud(latitud)
-                    .descripcion(null)
-                    .horario(estacionCAT.getHorariDeServei())
-                    .contacto(estacionCAT.getCorreuElectronic())
-                    .url(extraerUrl(estacionCAT.getWeb()))
-                    .codLocalidad(null)
-                    .build();
-
-            estaciones.add(estacion);
-        }
-        return estaciones;
-    }
-
-    @Override
-    public Map<Integer, String> obtenerMapaEstacionLocalidad() {
-        Map<Integer, String> mapa = new HashMap<>();
-        for (int i = 0; i < estacionesCAT.size(); i++) {
-            String municipi = estacionesCAT.get(i).getMunicipi();
-            if (municipi != null && !municipi.trim().isEmpty()) {
-                mapa.put(i, municipi);
-            }
-        }
-        return mapa;
-    }
-
-    private Long extraerCodigoProvinciaPorCP(Integer codigoPostal) {
-        if (codigoPostal == null) return null;
-
-        String cpString = String.format("%05d", codigoPostal);
-        int codigo = Integer.parseInt(cpString.substring(0, 2));
-
-        if (codigo >= 1 && codigo <= 52) return (long) codigo;
-        return null;
-    }
-
-    private Double convertirCoordenada(Double coordenada) {
-        if (coordenada == null) return null;
-        return (coordenada > 1_000_000) ? coordenada / 1_000_000.0 : coordenada;
-    }
-
-    private String extraerUrl(String web) {
-        if (web == null || web.trim().isEmpty()) return null;
-        return web.startsWith("http") ? web : null;
+    public String getSourceFormat() {
+        return "XML";
     }
 }

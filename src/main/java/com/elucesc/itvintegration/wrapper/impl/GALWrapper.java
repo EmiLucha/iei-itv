@@ -1,197 +1,152 @@
+
 package com.elucesc.itvintegration.wrapper.impl;
 
-import com.elucesc.itvintegration.dto.gal.EstacionGAL;
-import com.elucesc.itvintegration.model.Estacion;
-import com.elucesc.itvintegration.model.Localidad;
-import com.elucesc.itvintegration.model.Provincia;
-import com.elucesc.itvintegration.model.TipoEstacion;
-import com.elucesc.itvintegration.wrapper.ItvDataWrapper;
+import com.elucesc.itvintegration.wrapper.Wrapper;
+import com.fasterxml.jackson.databind.MappingIterator;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.csv.CsvMapper;
+import com.fasterxml.jackson.dataformat.csv.CsvSchema;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
-import java.util.stream.Collectors;
+import java.io.*;
+        import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
 
+/**
+ * Wrapper para Galicia
+ * Convierte CSV a JSON usando Jackson CSV
+ * El CSV de Galicia usa punto y coma (;) como separador
+ */
 @Slf4j
 @Component
-public class GALWrapper implements ItvDataWrapper {
+public class GALWrapper implements Wrapper {
 
-    private final List<EstacionGAL> estacionesGAL;
-    private final Map<String, Long> provinciaCodigoMap = new HashMap<>();
-    private final Map<String, Long> localidadCodigoMap = new HashMap<>();
-    private Long localidadCodigoCounter = 1L;
+    private final CsvMapper csvMapper;
+    private final ObjectMapper jsonMapper;
 
-    public GALWrapper(List<EstacionGAL> estacionesGAL) {
-        this.estacionesGAL = estacionesGAL;
+    public GALWrapper() {
+        this.csvMapper = new CsvMapper();
+        this.jsonMapper = new ObjectMapper();
     }
 
     @Override
-    public List<Provincia> transformarProvincias() {
-        Set<String> provinciasUnicas = estacionesGAL.stream()
-                .map(EstacionGAL::getProvincia)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toSet());
+    public String transformToJson(InputStream inputStream) throws IOException {
+        log.info("Convirtiendo CSV de Galicia a JSON");
 
-        List<Provincia> provincias = new ArrayList<>();
-        for (String nombreProvincia : provinciasUnicas) {
-            Long codigo = extraerCodigoProvincia(nombreProvincia);
-            provinciaCodigoMap.put(nombreProvincia, codigo);
+        // Leer todo el contenido en bytes
+        byte[] fileContent = inputStream.readAllBytes();
+        log.debug("Archivo leído: {} bytes", fileContent.length);
 
-            provincias.add(Provincia.builder()
-                    .codigo(codigo)
-                    .nombre(nombreProvincia)
-                    .build());
-        }
+        // Intentar con diferentes encodings
+        Charset[] encodings = {
+                Charset.forName("ISO-8859-1"),     // Latin-1 (más común en España)
+                Charset.forName("Windows-1252"),   // Windows Latin-1
+                StandardCharsets.UTF_8,            // UTF-8
+                Charset.forName("ISO-8859-15")     // Latin-9
+        };
 
-        return provincias;
-    }
+        IOException lastException = null;
 
-    @Override
-    public List<Localidad> transformarLocalidades() {
-        transformarProvincias();
-
-        List<Localidad> localidades = new ArrayList<>();
-        for (EstacionGAL estacion : estacionesGAL) {
-            String concello = estacion.getConcello();
-            if (concello == null || concello.trim().isEmpty()) continue;
-
-            if (!localidadCodigoMap.containsKey(concello)) {
-                Long codigoProvincia = extraerCodigoProvinciaDeCP(estacion.getCodigoPostal());
-
-                Localidad localidad = Localidad.builder()
-                        .codigo(null)
-                        .nombre(concello)
-                        .codProvincia(codigoProvincia)
-                        .build();
-
-                localidades.add(localidad);
-                localidadCodigoMap.put(concello, localidadCodigoCounter++);
-            }
-        }
-
-        return localidades;
-    }
-
-    @Override
-    public List<Estacion> transformarEstaciones() {
-        List<Estacion> estaciones = new ArrayList<>();
-
-        for (EstacionGAL estacionGAL : estacionesGAL) {
-            // Parsear coordenadas de Google Maps
-            Double[] coordenadas = parsearCoordenadasGMaps(estacionGAL.getCoordenadasGmaps());
-
-            Estacion estacion = Estacion.builder()
-                    .nombre(estacionGAL.getNomeDaEstacion())
-                    .tipo(TipoEstacion.ESTACION_FIJA)
-                    .direccion(estacionGAL.getEnderezo())
-                    .codigoPostal(estacionGAL.getCodigoPostal() != null ?
-                            estacionGAL.getCodigoPostal().longValue() : null)
-                    .longitud(coordenadas[0])
-                    .latitud(coordenadas[1])
-                    .descripcion(null)
-                    .horario(estacionGAL.getHorario())
-                    .contacto(estacionGAL.getCorreoElectronico())
-                    .url(extraerUrl(estacionGAL.getSolicitudeCitaPrevia()))
-                    .codLocalidad(null)
-                    .build();
-
-            estaciones.add(estacion);
-        }
-
-        return estaciones;
-    }
-
-    @Override
-    public Map<Integer, String> obtenerMapaEstacionLocalidad() {
-        Map<Integer, String> mapa = new HashMap<>();
-        for (int i = 0; i < estacionesGAL.size(); i++) {
-            String concello = estacionesGAL.get(i).getConcello();
-            if (concello != null && !concello.trim().isEmpty()) {
-                mapa.put(i, concello);
-            }
-        }
-        return mapa;
-    }
-
-    private Long extraerCodigoProvincia(String nombreProvincia) {
-        if (nombreProvincia == null) return null;
-
-        String normalized = nombreProvincia.toLowerCase();
-        if (normalized.contains("coruña") || normalized.contains("coruna")) {
-            return 15L;
-        } else if (normalized.contains("lugo")) {
-            return 27L;
-        } else if (normalized.contains("ourense")) {
-            return 32L;
-        } else if (normalized.contains("pontevedra")) {
-            return 36L;
-        }
-        return null;
-    }
-
-    private Long extraerCodigoProvinciaDeCP(Integer codigoPostal) {
-        if (codigoPostal == null) return null;
-
-        String cpString = String.format("%05d", codigoPostal);
-        String prefijo = cpString.substring(0, 2);
-
-        return Long.parseLong(prefijo);
-    }
-
-    private Double[] parsearCoordenadasGMaps(String coordenadas) {
-        if (coordenadas == null || coordenadas.trim().isEmpty()) {
-            return new Double[]{null, null};
-        }
-
-        try {
-            coordenadas = coordenadas.replaceAll("[°'\"]", "").trim();
-
-            String[] partes = coordenadas.split(",");
-            if (partes.length != 2) {
-                return new Double[]{null, null};
-            }
-
-            Double latitud = convertirCoordenada(partes[0].trim());
-            Double longitud = convertirCoordenada(partes[1].trim());
-
-            return new Double[]{longitud, latitud};
-        } catch (Exception e) {
-            log.warn("No se pudieron parsear coordenadas: {}", coordenadas, e);
-            return new Double[]{null, null};
-        }
-    }
-
-    private Double convertirCoordenada(String coord) {
-        coord = coord.trim();
-
-        if (!coord.contains(" ")) {
-            return Double.parseDouble(coord);
-        }
-
-        String[] partes = coord.split("\\s+");
-        if (partes.length == 2) {
-            double grados = Double.parseDouble(partes[0]);
-            double minutos = Double.parseDouble(partes[1]);
-            double resultado = grados + (minutos / 60.0);
-            return resultado;
-        }
-
-        return Double.parseDouble(coord);
-    }
-
-    private String extraerUrl(String solicitudCitaPrevia) {
-        if (solicitudCitaPrevia == null || solicitudCitaPrevia.trim().isEmpty()) {
-            return null;
-        }
-
-        if (solicitudCitaPrevia.startsWith("http")) {
+        for (Charset encoding : encodings) {
             try {
-                return solicitudCitaPrevia.split("\\?")[0];
+                log.debug("Intentando parsear CSV con encoding: {}", encoding.name());
+
+                // Convertir bytes a String con el encoding
+                String csvContent = new String(fileContent, encoding);
+
+                // Crear InputStream desde el String
+                InputStream contentStream = new ByteArrayInputStream(
+                        csvContent.getBytes(StandardCharsets.UTF_8)
+                );
+
+                // IMPORTANTE: Configurar punto y coma como separador
+                CsvSchema schema = CsvSchema.emptySchema()
+                        .withHeader()
+                        .withColumnSeparator(';')  // ← PUNTO Y COMA, no coma
+                        .withQuoteChar('"')
+                        .withLineSeparator("\n")
+                        .withNullValue("")
+                        .withSkipFirstDataRow(false);
+
+                // Leer el CSV
+                MappingIterator<Map<String, String>> iterator = csvMapper
+                        .readerFor(Map.class)
+                        .with(schema)
+                        .readValues(contentStream);
+
+                List<Map<String, String>> data = iterator.readAll();
+
+                // Verificar que los datos tengan sentido
+                if (!data.isEmpty() && verificarDatosValidos(data)) {
+                    log.info("✅ CSV leído correctamente con {}: {} registros",
+                            encoding.name(), data.size());
+
+                    // Mostrar headers para debug
+                    if (!data.isEmpty()) {
+                        log.debug("Headers detectados: {}", data.get(0).keySet());
+                        log.debug("Primer registro: {}", data.get(0));
+                    }
+
+                    // Convertir a JSON
+                    String json = jsonMapper.writerWithDefaultPrettyPrinter()
+                            .writeValueAsString(data);
+
+                    log.debug("JSON generado (primeros 500 chars): {}",
+                            json.substring(0, Math.min(500, json.length())));
+
+                    return json;
+                }
+
+                log.debug("Datos no válidos con encoding {}", encoding.name());
+
             } catch (Exception e) {
-                return solicitudCitaPrevia;
+                log.debug("❌ Falló con encoding {}: {}", encoding.name(), e.getMessage());
+                lastException = new IOException(e);
             }
         }
 
-        return solicitudCitaPrevia;
+        // Si ninguno funcionó
+        log.error("No se pudo leer el CSV con ningún encoding probado");
+        throw new IOException(
+                "Error al parsear CSV. Verifica que use punto y coma (;) como separador. " +
+                        "Probados encodings: ISO-8859-1, Windows-1252, UTF-8, ISO-8859-15.",
+                lastException
+        );
     }
+
+    /**
+     * Verifica que los datos no contengan caracteres raros
+     */
+    private boolean verificarDatosValidos(List<Map<String, String>> data) {
+        if (data.isEmpty()) {
+            return false;
+        }
+
+        Map<String, String> firstRecord = data.get(0);
+
+        // Verificar que tenga varios campos (no solo uno gigante)
+        if (firstRecord.size() < 3) {
+            log.debug("Pocos campos detectados: {}. Puede ser separador incorrecto.",
+                    firstRecord.size());
+            return false;
+        }
+
+        // Verificar que no haya caracteres de reemplazo
+        for (String key : firstRecord.keySet()) {
+            if (key.contains("�") || key.contains("\uFFFD")) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    @Override
+    public String getSourceFormat() {
+        return "CSV";
+    }
+
 }
