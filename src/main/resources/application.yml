@@ -34,12 +34,19 @@ logging:
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
 
-# Configuración de archivos con nuevos formatos
+## Configuración de archivos con nuevos formatos
+#integration:
+#  files:
+#    cv: classpath:data/estaciones_cv.json    # Comunidad Valenciana - JSON
+#    gal: classpath:data/estaciones_gal.csv   # Galicia - CSV
+#    cat: classpath:data/estaciones_cat.xml   # Cataluña - XML
+
+# Configuración de archivos demo
 integration:
   files:
-    cv: classpath:data/estaciones_cv.json    # Comunidad Valenciana - JSON
-    gal: classpath:data/estaciones_gal.csv   # Galicia - CSV
-    cat: classpath:data/estaciones_cat.xml   # Cataluña - XML
+    cv: classpath:demo/estaciones_cv_demo.json    # Comunidad Valenciana - JSON
+    gal: classpath:demo/estaciones_gal_demo.csv   # Galicia - CSV
+    cat: classpath:demo/estaciones_cat_demo.xml   # Cataluña - XML
 
 # OpenCage Geocoding API Configuration (2500 peticiones/día gratis)
 opencage:

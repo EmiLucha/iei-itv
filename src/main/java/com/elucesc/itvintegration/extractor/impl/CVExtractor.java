@@ -5,7 +5,7 @@ import com.elucesc.itvintegration.model.Estacion;
 import com.elucesc.itvintegration.model.Localidad;
 import com.elucesc.itvintegration.model.Provincia;
 import com.elucesc.itvintegration.model.TipoEstacion;
-import com.elucesc.itvintegration.service.OpenCageGeocodingService;
+import com.elucesc.itvintegration.service.SeleniumGeocodingService;
 import com.elucesc.itvintegration.extractor.ItvDataExtractor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,8 +19,7 @@ import java.util.stream.Collectors;
 public class CVExtractor implements ItvDataExtractor {
 
     private final List<EstacionCV> estacionesCV;
-
-    private final OpenCageGeocodingService openCageGeocodingService;
+    private final SeleniumGeocodingService seleniumGeocodingService;
 
     private final Map<String, Long> provinciaCodigoMap = new HashMap<>();
     private final Map<String, Long> localidadCodigoMap = new HashMap<>();
@@ -29,31 +28,10 @@ public class CVExtractor implements ItvDataExtractor {
     private Long localidadCodigoCounter = 1L;
 
     @Autowired
-    public CVExtractor(List<EstacionCV> estacionesCV, OpenCageGeocodingService openCageGeocodingService) {
+    public CVExtractor(List<EstacionCV> estacionesCV, SeleniumGeocodingService seleniumGeocodingService) {
         this.estacionesCV = estacionesCV;
-        this.openCageGeocodingService = openCageGeocodingService;
+        this.seleniumGeocodingService = seleniumGeocodingService;
     }
-
-//    @Override
-//    public List<Provincia> transformarProvincias() {
-//        Set<String> provinciasUnicas = estacionesCV.stream()
-//                .map(EstacionCV::getProvincia)
-//                .filter(Objects::nonNull)
-//                .collect(Collectors.toSet());
-//
-//        List<Provincia> provincias = new ArrayList<>();
-//        for (String nombreProvincia : provinciasUnicas) {
-//            Long codigo = extraerCodigoProvincia(nombreProvincia);
-//            provinciaCodigoMap.put(nombreProvincia, codigo);
-//
-//            provincias.add(Provincia.builder()
-//                    .codigo(codigo)
-//                    .nombre(nombreProvincia)
-//                    .build());
-//        }
-//
-//        return provincias;
-//    }
 
     @Override
     public List<Localidad> transformarLocalidades() {
@@ -91,12 +69,21 @@ public class CVExtractor implements ItvDataExtractor {
     public List<Estacion> transformarEstaciones() {
         List<Estacion> estaciones = new ArrayList<>();
 
-        log.info("Iniciando geocoding de {} estaciones (puede tardar unos minutos...)", estacionesCV.size());
+        log.info("Iniciando geocoding con Selenium de {} estaciones (puede tardar unos minutos...)",
+                estacionesCV.size());
+
+        // Verificar que Selenium está disponible
+        if (!seleniumGeocodingService.isAvailable()) {
+            log.error("❌ Selenium WebDriver no está disponible. Verifica que ChromeDriver esté instalado.");
+            log.error("Descarga ChromeDriver desde: https://chromedriver.chromium.org/");
+            throw new RuntimeException("Selenium WebDriver no disponible");
+        }
+
         int procesadas = 0;
         int conCoordenadas = 0;
 
         for (EstacionCV estacionCV : estacionesCV) {
-            // Obtener coordenadas usando OpenCage
+            // Obtener coordenadas usando Selenium
             Double[] coordenadas = obtenerCoordenadasInteligente(estacionCV);
 
             if (coordenadas[0] != null && coordenadas[1] != null) {
@@ -143,11 +130,11 @@ public class CVExtractor implements ItvDataExtractor {
     }
 
     /**
-     * Obtiene coordenadas de forma inteligente:
+     * Obtiene coordenadas de forma inteligente usando Selenium:
      * - Omite estaciones móviles/agrícolas
      * - Usa dirección completa cuando es válida
      * - Fallback a municipio si dirección no funciona
-     * - Respeta límite de 1 petición/segundo de OpenCage
+     * - Respeta delay entre peticiones para evitar bloqueos
      */
     private Double[] obtenerCoordenadasInteligente(EstacionCV estacion) {
         String direccion = estacion.getDireccion();
@@ -162,7 +149,7 @@ public class CVExtractor implements ItvDataExtractor {
 
         // Si la dirección es válida, usarla completa
         if (esDireccionValida(direccion)) {
-            Double[] coordenadas = openCageGeocodingService.obtenerCoordenadasConDelay(
+            Double[] coordenadas = seleniumGeocodingService.obtenerCoordenadasConDelay(
                     construirDireccionCompleta(direccion, municipio, provincia)
             );
 
@@ -170,13 +157,13 @@ public class CVExtractor implements ItvDataExtractor {
                 return coordenadas;
             }
 
-            log.warn("No se encontraron coordenadas para dirección: {}", direccion);
+            log.warn("No se encontraron coordenadas con Selenium para dirección: {}", direccion);
         }
 
         // Fallback: buscar solo por municipio + provincia
         if (municipio != null && !municipio.trim().isEmpty()) {
             log.debug("Usando municipio como fallback: {}", municipio);
-            return openCageGeocodingService.obtenerCoordenadasConDelay(
+            return seleniumGeocodingService.obtenerCoordenadasConDelay(
                     construirDireccionCompleta(null, municipio, provincia)
             );
         }
@@ -199,7 +186,7 @@ public class CVExtractor implements ItvDataExtractor {
             return false;
         }
 
-        // OpenCage maneja bien direcciones con "s/n", así que las permitimos
+        // Selenium/Google Maps maneja bien direcciones con "s/n", así que las permitimos
         return true;
     }
 
@@ -237,15 +224,6 @@ public class CVExtractor implements ItvDataExtractor {
         return TipoEstacion.fromString(tipoOriginal);
     }
 
-//    private Long extraerCodigoProvincia(String nombreProvincia) {
-//        switch (nombreProvincia) {
-//            case "Alicante": return 3L;
-//            case "Castellón": return 12L;
-//            case "Valencia": return 46L;
-//            default: return provinciaCodigoCounter++;
-//        }
-//    }
-
     private Long parseCodigoPostal(String codigoPostal) {
         if (codigoPostal == null || codigoPostal.trim().isEmpty()) {
             return null;
@@ -264,19 +242,23 @@ public class CVExtractor implements ItvDataExtractor {
         Map<Long, String> provinciasMap = new LinkedHashMap<>();
 
         for (EstacionCV estacion : estacionesCV) {
-            String nombreProvincia = estacion.getProvincia();
-            if (nombreProvincia == null) continue;
+            String nombreProvinciaOriginal = estacion.getProvincia();
+            if (nombreProvinciaOriginal == null) continue;
 
             // NORMALIZAR nombre de provincia (quitar typos)
-            nombreProvincia = normalizarNombreProvincia(nombreProvincia);
+            String nombreProvinciaNormalizado = normalizarNombreProvincia(nombreProvinciaOriginal);
 
-            Long codigo = extraerCodigoProvincia(nombreProvincia);
+            Long codigo = extraerCodigoProvincia(nombreProvinciaNormalizado);
 
             // Solo agregar si no existe ya (evita duplicados)
             if (!provinciasMap.containsKey(codigo)) {
-                provinciasMap.put(codigo, nombreProvincia);
-                log.debug("Provincia detectada: código={}, nombre='{}'", codigo, nombreProvincia);
+                provinciasMap.put(codigo, nombreProvinciaNormalizado);
+                log.debug("Provincia detectada: código={}, nombre='{}'", codigo, nombreProvinciaNormalizado);
             }
+
+            // CRÍTICO: Guardar mapeo tanto del nombre original como del normalizado
+            provinciaCodigoMap.put(nombreProvinciaOriginal, codigo);
+            provinciaCodigoMap.put(nombreProvinciaNormalizado, codigo);
         }
 
         return provinciasMap.entrySet().stream()
@@ -329,5 +311,4 @@ public class CVExtractor implements ItvDataExtractor {
                 return provinciaCodigoCounter++;
         }
     }
-
 }

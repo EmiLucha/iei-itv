@@ -97,6 +97,27 @@
             <artifactId>jackson-dataformat-csv</artifactId>
         </dependency>
 
+        <!-- Para detectar encoding .csv -->
+        <dependency>
+            <groupId>com.github.albfernandez</groupId>
+            <artifactId>juniversalchardet</artifactId>
+            <version>2.4.0</version>
+        </dependency>
+
+        <!-- Selenium WebDriver -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-java</artifactId>
+            <version>4.15.0</version>
+        </dependency>
+
+        <!-- WebDriverManager (gestiona automáticamente los drivers) -->
+        <dependency>
+            <groupId>io.github.bonigarcia</groupId>
+            <artifactId>webdrivermanager</artifactId>
+            <version>5.6.2</version>
+        </dependency>
+
         <!-- Para convertir XML a JSON -->
         <dependency>
             <groupId>org.json</groupId>

@@ -38,7 +38,7 @@ public class IntegrationService {
     private final ProvinciaRepository provinciaRepository;
     private final LocalidadRepository localidadRepository;
     private final EstacionRepository estacionRepository;
-    private final OpenCageGeocodingService openCageGeocodingService;
+    private final SeleniumGeocodingService seleniumGeocodingService;
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
     private final WrapperFactory wrapperFactory;
@@ -48,14 +48,14 @@ public class IntegrationService {
             ProvinciaRepository provinciaRepository,
             LocalidadRepository localidadRepository,
             EstacionRepository estacionRepository,
-            OpenCageGeocodingService openCageGeocodingService,
+            SeleniumGeocodingService seleniumGeocodingService,
             ObjectMapper objectMapper,
             ResourceLoader resourceLoader,
             WrapperFactory wrapperFactory) {
         this.provinciaRepository = provinciaRepository;
         this.localidadRepository = localidadRepository;
         this.estacionRepository = estacionRepository;
-        this.openCageGeocodingService = openCageGeocodingService;
+        this.seleniumGeocodingService = seleniumGeocodingService;
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.wrapperFactory = wrapperFactory;
@@ -144,7 +144,7 @@ public class IntegrationService {
                         new TypeReference<List<EstacionCV>>() {}
                 );
                 log.info("Parseadas {} estaciones de Comunidad Valenciana", estacionesCV.size());
-                return new CVExtractor(estacionesCV, openCageGeocodingService);
+                return new CVExtractor(estacionesCV, seleniumGeocodingService);
 
             case GALICIA:
                 List<EstacionGAL> estacionesGAL = objectMapper.readValue(

@@ -1,4 +1,3 @@
-
 package com.elucesc.itvintegration.wrapper.impl;
 
 import com.elucesc.itvintegration.wrapper.Wrapper;
@@ -7,17 +6,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.csv.CsvMapper;
 import com.fasterxml.jackson.dataformat.csv.CsvSchema;
 import lombok.extern.slf4j.Slf4j;
+import org.mozilla.universalchardet.UniversalDetector;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
-        import java.nio.charset.Charset;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Wrapper para Galicia
- * Convierte CSV a JSON usando Jackson CSV
+ * Detecta automáticamente el encoding del archivo CSV y lo convierte a JSON
  * El CSV de Galicia usa punto y coma (;) como separador
  */
 @Slf4j
@@ -40,113 +40,121 @@ public class GALWrapper implements Wrapper {
         byte[] fileContent = inputStream.readAllBytes();
         log.debug("Archivo leído: {} bytes", fileContent.length);
 
-        // Intentar con diferentes encodings
-        Charset[] encodings = {
-                Charset.forName("ISO-8859-1"),     // Latin-1 (más común en España)
-                Charset.forName("Windows-1252"),   // Windows Latin-1
-                StandardCharsets.UTF_8,            // UTF-8
-                Charset.forName("ISO-8859-15")     // Latin-9
-        };
+        // Detectar encoding del archivo
+        Charset detectedCharset = detectEncoding(fileContent);
+        log.info("✓ Encoding detectado: {}", detectedCharset.name());
 
-        IOException lastException = null;
+        try {
+            // Convertir bytes a String con el encoding detectado
+            String csvContent = new String(fileContent, detectedCharset);
 
-        for (Charset encoding : encodings) {
-            try {
-                log.debug("Intentando parsear CSV con encoding: {}", encoding.name());
+            // Crear InputStream desde el String (ahora en UTF-8 internamente)
+            InputStream contentStream = new ByteArrayInputStream(
+                    csvContent.getBytes(StandardCharsets.UTF_8)
+            );
 
-                // Convertir bytes a String con el encoding
-                String csvContent = new String(fileContent, encoding);
+            // Configurar esquema CSV con punto y coma como separador
+            CsvSchema schema = CsvSchema.emptySchema()
+                    .withHeader()
+                    .withColumnSeparator(';')
+                    .withQuoteChar('"')
+                    .withLineSeparator("\n")
+                    .withNullValue("")
+                    .withSkipFirstDataRow(false);
 
-                // Crear InputStream desde el String
-                InputStream contentStream = new ByteArrayInputStream(
-                        csvContent.getBytes(StandardCharsets.UTF_8)
-                );
+            // Leer el CSV
+            MappingIterator<Map<String, String>> iterator = csvMapper
+                    .readerFor(Map.class)
+                    .with(schema)
+                    .readValues(contentStream);
 
-                // IMPORTANTE: Configurar punto y coma como separador
-                CsvSchema schema = CsvSchema.emptySchema()
-                        .withHeader()
-                        .withColumnSeparator(';')  // ← PUNTO Y COMA, no coma
-                        .withQuoteChar('"')
-                        .withLineSeparator("\n")
-                        .withNullValue("")
-                        .withSkipFirstDataRow(false);
+            List<Map<String, String>> data = iterator.readAll();
 
-                // Leer el CSV
-                MappingIterator<Map<String, String>> iterator = csvMapper
-                        .readerFor(Map.class)
-                        .with(schema)
-                        .readValues(contentStream);
-
-                List<Map<String, String>> data = iterator.readAll();
-
-                // Verificar que los datos tengan sentido
-                if (!data.isEmpty() && verificarDatosValidos(data)) {
-                    log.info("✅ CSV leído correctamente con {}: {} registros",
-                            encoding.name(), data.size());
-
-                    // Mostrar headers para debug
-                    if (!data.isEmpty()) {
-                        log.debug("Headers detectados: {}", data.get(0).keySet());
-                        log.debug("Primer registro: {}", data.get(0));
-                    }
-
-                    // Convertir a JSON
-                    String json = jsonMapper.writerWithDefaultPrettyPrinter()
-                            .writeValueAsString(data);
-
-                    log.debug("JSON generado (primeros 500 chars): {}",
-                            json.substring(0, Math.min(500, json.length())));
-
-                    return json;
-                }
-
-                log.debug("Datos no válidos con encoding {}", encoding.name());
-
-            } catch (Exception e) {
-                log.debug("❌ Falló con encoding {}: {}", encoding.name(), e.getMessage());
-                lastException = new IOException(e);
+            if (data.isEmpty()) {
+                throw new IOException("El archivo CSV está vacío o no se pudo parsear correctamente");
             }
-        }
 
-        // Si ninguno funcionó
-        log.error("No se pudo leer el CSV con ningún encoding probado");
-        throw new IOException(
-                "Error al parsear CSV. Verifica que use punto y coma (;) como separador. " +
-                        "Probados encodings: ISO-8859-1, Windows-1252, UTF-8, ISO-8859-15.",
-                lastException
-        );
+            log.info("✅ CSV parseado correctamente: {} registros", data.size());
+            log.debug("Headers detectados: {}", data.get(0).keySet());
+            log.debug("Primer registro: {}", data.get(0));
+
+            // Convertir a JSON (UTF-8)
+            String json = jsonMapper.writerWithDefaultPrettyPrinter()
+                    .writeValueAsString(data);
+
+            return json;
+
+        } catch (Exception e) {
+            log.error("❌ Error al parsear CSV con encoding {}", detectedCharset.name(), e);
+            throw new IOException(
+                    "Error al parsear CSV. Verifica que use punto y coma (;) como separador. " +
+                            "Encoding detectado: " + detectedCharset.name(),
+                    e
+            );
+        }
     }
 
     /**
-     * Verifica que los datos no contengan caracteres raros
+     * Detecta el encoding del archivo usando UniversalDetector (juniversalchardet)
+     * Esta librería es muy precisa y se usa en navegadores como Firefox
      */
-    private boolean verificarDatosValidos(List<Map<String, String>> data) {
-        if (data.isEmpty()) {
-            return false;
-        }
+    private Charset detectEncoding(byte[] fileContent) throws IOException {
+        UniversalDetector detector = new UniversalDetector(null);
 
-        Map<String, String> firstRecord = data.get(0);
+        // Analizar el contenido
+        detector.handleData(fileContent, 0, fileContent.length);
+        detector.dataEnd();
 
-        // Verificar que tenga varios campos (no solo uno gigante)
-        if (firstRecord.size() < 3) {
-            log.debug("Pocos campos detectados: {}. Puede ser separador incorrecto.",
-                    firstRecord.size());
-            return false;
-        }
+        String detectedEncoding = detector.getDetectedCharset();
+        detector.reset();
 
-        // Verificar que no haya caracteres de reemplazo
-        for (String key : firstRecord.keySet()) {
-            if (key.contains("�") || key.contains("\uFFFD")) {
-                return false;
+        if (detectedEncoding != null) {
+            log.debug("UniversalDetector detectó: {}", detectedEncoding);
+
+            // Normalizar nombres de charset
+            detectedEncoding = normalizeCharsetName(detectedEncoding);
+
+            try {
+                return Charset.forName(detectedEncoding);
+            } catch (Exception e) {
+                log.warn("Charset detectado '{}' no es válido, usando fallback", detectedEncoding);
             }
         }
 
-        return true;
+        // Fallback: Si no se detectó, usar ISO-8859-1 (más común en España)
+        log.warn("No se pudo detectar encoding automáticamente, usando ISO-8859-1 como fallback");
+        return Charset.forName("ISO-8859-1");
+    }
+
+    /**
+     * Normaliza nombres de charset que pueden venir con diferentes variaciones
+     */
+    private String normalizeCharsetName(String charset) {
+        if (charset == null) return null;
+
+        String normalized = charset.toUpperCase().trim();
+
+        // Mapear variaciones comunes
+        switch (normalized) {
+            case "WINDOWS-1252":
+            case "CP1252":
+                return "Windows-1252";
+            case "ISO-8859-1":
+            case "LATIN1":
+                return "ISO-8859-1";
+            case "UTF-8":
+            case "UTF8":
+                return "UTF-8";
+            case "ISO-8859-15":
+            case "LATIN9":
+                return "ISO-8859-15";
+            default:
+                return charset;
+        }
     }
 
     @Override
     public String getSourceFormat() {
         return "CSV";
     }
-
 }
