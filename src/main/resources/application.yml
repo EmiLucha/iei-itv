@@ -31,7 +31,7 @@ logging:
   level:
     root: INFO
     com.elucesc.itvintegration: DEBUG
-    org.hibernate.SQL: DEBUG
+    org.hibernate.SQL: INFO
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
 
 ## Configuración de archivos con nuevos formatos

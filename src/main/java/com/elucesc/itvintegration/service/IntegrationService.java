@@ -26,10 +26,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
+import com.elucesc.itvintegration.service.EstacionValidador;
 
 @Slf4j
 @Service
@@ -42,6 +45,7 @@ public class IntegrationService {
     private final ObjectMapper objectMapper;
     private final ResourceLoader resourceLoader;
     private final WrapperFactory wrapperFactory;
+    private final EstacionValidador estacionValidator;
 
     @Autowired
     public IntegrationService(
@@ -51,7 +55,8 @@ public class IntegrationService {
             SeleniumGeocodingService seleniumGeocodingService,
             ObjectMapper objectMapper,
             ResourceLoader resourceLoader,
-            WrapperFactory wrapperFactory) {
+            WrapperFactory wrapperFactory,
+            EstacionValidador estacionValidador) {
         this.provinciaRepository = provinciaRepository;
         this.localidadRepository = localidadRepository;
         this.estacionRepository = estacionRepository;
@@ -59,6 +64,7 @@ public class IntegrationService {
         this.objectMapper = objectMapper;
         this.resourceLoader = resourceLoader;
         this.wrapperFactory = wrapperFactory;
+        this.estacionValidator = estacionValidador;
     }
 
     /**
@@ -260,8 +266,37 @@ public class IntegrationService {
     private void guardarEstaciones(List<Estacion> estaciones) {
         int guardadas = 0;
         int fallidas = 0;
+        int rechazadas = 0;
+        List<String> estacionesProblematicas = new ArrayList<>();
+
+        log.info("=== VALIDANDO Y GUARDANDO ESTACIONES ===");
 
         for (Estacion estacion : estaciones) {
+            // Validar estación
+            List<String> errores = estacionValidator.validar(estacion);
+
+            if (!errores.isEmpty()) {
+                // Intentar corregir automáticamente
+                Estacion estacionCorregida = estacionValidator.intentarCorregir(estacion, errores);
+
+                // Validar de nuevo después de correcciones
+                List<String> erroresDespuesCorreccion = estacionValidator.validar(estacionCorregida);
+
+                if (!erroresDespuesCorreccion.isEmpty()) {
+                    // No se pudo corregir - rechazar estación
+                    rechazadas++;
+                    String informe = estacionValidator.generarInforme(estacion, erroresDespuesCorreccion);
+                    estacionesProblematicas.add(informe);
+                    log.warn("⚠️ Estación rechazada por errores de validación: {}",
+                            estacion.getNombre());
+                    continue; // No guardar esta estación
+                } else {
+                    log.info("✅ Estación corregida automáticamente: {}", estacion.getNombre());
+                    estacion = estacionCorregida;
+                }
+            }
+
+            // Intentar guardar
             try {
                 estacionRepository.save(estacion);
                 guardadas++;
@@ -273,7 +308,20 @@ public class IntegrationService {
             }
         }
 
-        log.info("Estaciones guardadas: {}, fallidas: {}", guardadas, fallidas);
+        // Resumen final
+        log.info("=== RESUMEN DE GUARDADO ===");
+        log.info("✅ Guardadas: {}", guardadas);
+        log.info("❌ Fallidas (error BD): {}", fallidas);
+        log.info("⚠️ Rechazadas (validación): {}", rechazadas);
+
+        // Mostrar informe detallado de estaciones problemáticas
+        if (!estacionesProblematicas.isEmpty()) {
+            log.warn("\n\n╔════════════════════════════════════════════════════════════╗");
+            log.warn("║  INFORME DE ESTACIONES RECHAZADAS POR VALIDACIÓN          ║");
+            log.warn("╚════════════════════════════════════════════════════════════╝");
+            estacionesProblematicas.forEach(log::warn);
+            log.warn("\n⚠️ Total de estaciones rechazadas: {}\n", rechazadas);
+        }
     }
 
     public enum TipoOrigen {

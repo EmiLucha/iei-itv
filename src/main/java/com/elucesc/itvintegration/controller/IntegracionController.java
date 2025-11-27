@@ -1,6 +1,12 @@
 package com.elucesc.itvintegration.controller;
 
 import com.elucesc.itvintegration.service.IntegrationService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,6 +20,7 @@ import java.util.Map;
 @Slf4j
 @RestController
 @RequestMapping("/api/integracion")
+@Tag(name = "Integración ITV", description = "Endpoints para integrar datos de distintas comunidades autónomas")
 public class IntegracionController {
 
     private final IntegrationService integracionService;
@@ -32,9 +39,12 @@ public class IntegracionController {
         this.integracionService = integracionService;
     }
 
-    /**
-     * Integra solo el archivo de Comunidad Valenciana
-     */
+    @Operation(summary = "Integrar datos de Comunidad Valenciana",
+            description = "Procesa e integra únicamente el archivo de la Comunidad Valenciana.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Integración realizada correctamente"),
+            @ApiResponse(responseCode = "500", description = "Error interno al integrar los datos")
+    })
     @PostMapping("/cv")
     public ResponseEntity<Map<String, String>> integrarCV() {
         try {
@@ -53,9 +63,12 @@ public class IntegracionController {
         }
     }
 
-    /**
-     * Integra solo el archivo de Galicia
-     */
+    @Operation(summary = "Integrar datos de Galicia",
+            description = "Procesa e integra únicamente el archivo de Galicia.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Integración realizada correctamente"),
+            @ApiResponse(responseCode = "500", description = "Error interno al integrar los datos")
+    })
     @PostMapping("/gal")
     public ResponseEntity<Map<String, String>> integrarGAL() {
         try {
@@ -74,9 +87,12 @@ public class IntegracionController {
         }
     }
 
-    /**
-     * Integra solo el archivo de Cataluña
-     */
+    @Operation(summary = "Integrar datos de Cataluña",
+            description = "Procesa e integra únicamente el archivo de Cataluña.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Integración realizada correctamente"),
+            @ApiResponse(responseCode = "500", description = "Error interno al integrar los datos")
+    })
     @PostMapping("/cat")
     public ResponseEntity<Map<String, String>> integrarCAT() {
         try {
@@ -95,9 +111,12 @@ public class IntegracionController {
         }
     }
 
-    /**
-     * Integra todos los archivos de una vez
-     */
+    @Operation(summary = "Integración completa",
+            description = "Integra los archivos de todas las comunidades disponibles.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Integración completa realizada correctamente"),
+            @ApiResponse(responseCode = "500", description = "Error interno al integrar los datos")
+    })
     @PostMapping("/all")
     public ResponseEntity<Map<String, String>> integrarTodos() {
         try {
@@ -116,9 +135,8 @@ public class IntegracionController {
         }
     }
 
-    /**
-     * Endpoint de salud
-     */
+    @Operation(summary = "Endpoint de salud", description = "Verifica que el servicio está activo.")
+    @ApiResponse(responseCode = "200", description = "Servicio activo")
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of("status", "UP"));
